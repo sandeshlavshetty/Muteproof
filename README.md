@@ -2,15 +2,43 @@
 
 Turn an analyst’s closure note into a small, temporary mute. Refuse the mute when it would hide a real attack.
 
-CyberForge 2026 · Mitigata · idea submission by 18 Oct, build on 31 Oct in Bengaluru. Team of 2.
+**CyberForge 2026 · Mitigata** 
 
-This document is the shared plan. The slide outline at the bottom maps one-to-one onto a submission deck.
+**Contents:** [Demo](#demo) · [Who it is for](#who-it-is-for) · [Problem](#problem) · [Solution](#solution) · [Where the AI is](#where-the-ai-is) · [Technical design](#technical-design) · [Tech stack](#tech-stack) · [Build plan](#build-plan) · [Risks and fallbacks](#risks-and-fallbacks) 
 
 ---
 
 ## One sentence
 
 After an analyst closes a noisy alert, MuteProof drafts a scoped, expiring exception for that customer only, shows what the last seven days of alerts would have hidden, and blocks the draft if a high-risk attack sits inside that scope. A human approves it. Nothing is silenced until they do.
+
+---
+
+## Demo
+
+
+### Scene 1: a narrow note becomes a 14-day mute
+
+The analyst closes a scanner alert with “Qualys scan, 01:00–04:00.” MuteProof drafts a 14-day exception for that scanner range and those hours. The seven-day replay shows only scanner alerts, so the draft is allowed for approval.
+
+<img width="1600" height="900" alt="01_safe_scanner_exception" src="https://github.com/user-attachments/assets/325bee82-77c8-44dc-890d-8d1d188e0ae7" />
+
+
+### Scene 2: a broad note is refused
+
+The analyst writes “Ignore PowerShell on the subnet.” The replay finds a confirmed remote-execution alert inside that scope, so MuteProof refuses the draft and shows why. The alternative it offers is the IT automation account, the signed admin binary, and a 7-day expiry.
+
+<img width="1600" height="900" alt="02_dangerous_rule_refused" src="https://github.com/user-attachments/assets/88b8ead2-1bf2-4eff-9dd7-072d4f74c2c7" />
+
+
+### Scene 3: another customer is untouched
+
+After the scanner exception is approved for `cust-a`, the analyst switches to `cust-b`. The same scanner detection fires there on a different range, and no exception exists for that customer.
+
+<img width="1600" height="900" alt="03_customer_isolation" src="https://github.com/user-attachments/assets/7153523e-24f6-4656-829d-d810ca651444" />
+
+
+---
 
 ## Who it is for
 
@@ -41,6 +69,8 @@ MuteProof reads the closed alert and the analyst’s sentence and proposes one e
 
 A safety check replays that exception against the last seven days of alerts for that same customer. If the mute would also have hidden a high-risk pattern, MuteProof refuses it and proposes a tighter scope. The analyst approves or rejects. Approved exceptions expire. Renewal means running the replay again.
 
+**Impact.** Hours go back to analysts on repeat noise. The attack stays visible. Every approve, refuse, and expiry is an audit line a detection engineer can defend.
+
 ## Where the AI is
 
 The model does one job: read a loose sentence plus the alert fields and emit a structured exception. “Qualys scan, ignore it” becomes “this scanner range, 01:00–04:00, this customer, 14 days.”
@@ -55,18 +85,6 @@ The safety decision is not left to the model. Fixed rules plus the seven-day rep
 | Suggest a tighter scope when the first draft is broad | Model | Second exception JSON |
 | Refuse if a high-risk alert sits in scope | Rules + replay | Allow or refuse, with the alerts that matched |
 | Silence future alerts | Human | Approved exception with owner and expiry |
-
----
-
-## What the demo must show
-
-Six closed alerts, one mock customer, one second customer used only to prove isolation.
-
-1. Note “Qualys scan, 01:00–04:00” becomes a 14-day exception for that scanner range and those hours. Replay shows only scanner alerts.
-2. Note “Ignore PowerShell on the subnet” is refused. Replay shows a confirmed remote-execution alert inside that scope. The alternative is the IT automation account, the signed admin binary, and a 7-day expiry.
-3. The scanner exception does not exist for the second customer.
-
-If those three scenes work on a laptop, the idea is demonstrated.
 
 ---
 
@@ -307,9 +325,19 @@ Customer A, `cust-a`. Times are the demo clock, all inside the last seven days.
 
 Customer B, `cust-b`, has the same scanner detection on a different range. After A’s scanner exception is approved, B’s screen shows no active exception.
 
+### Screen
+
+One page, three columns.
+
+1. **Queue.** Customer switcher (A / B). Closed alerts with their notes.
+2. **Draft.** The sentence, the JSON in plain labels (not raw JSON as the only view), decision badge, expiry, owner.
+3. **Replay.** Each matched alert, benign or malicious. Approve is enabled only when `decision = allow_for_approval`. Refuse shows the reason and the narrower draft, with its own approve button if that one passed the gate.
+
+Customer B is the same page with a different `tenant_id`. Empty exception list is the isolation proof.
+
 ---
 
-## Tech
+## Tech stack
 
 | Layer | Choice | Why |
 | --- | --- | --- |
@@ -317,11 +345,11 @@ Customer B, `cust-b`, has the same scanner detection on a different range. After
 | DB | SQLite | One file, no setup on hackathon wifi |
 | UI | React + Vite | One approval screen, no server-side rendering |
 | Model | Any chat API that returns JSON. Gemini or OpenAI, behind one function | Swap keys without touching the gate |
-| Tests | pytest on the gate and the matcher | The refusal cases are the demo. They should fail in CI-style locally before the laptop demo |
+| Tests | pytest on the gate and the matcher | The refusal cases are the demo, so they run locally before every rehearsal |
 
 No login, no cloud deploy, no streaming. The UI talks to `localhost`.
 
-Repository layout to create on the day:
+Planned repository layout:
 
 ```text
 muteproof/
@@ -336,28 +364,18 @@ muteproof/
     tests/test_gate.py
   frontend/
     src/App.jsx         # queue, draft, replay, approve
-  README.md             # this file
+  docs/
+    images/             # demo screenshots used in this README
+  README.md
 ```
-
-### Screen
-
-One page, three columns.
-
-1. **Queue.** Customer switcher (A / B). Closed alerts with their notes.
-2. **Draft.** The sentence, the JSON in plain labels (not raw JSON as the only view), decision badge, expiry, owner.
-3. **Replay.** Each matched alert, benign or malicious. Approve is enabled only when `decision = allow_for_approval`. Refuse shows the reason and the narrower draft, with its own approve button if that one passed the gate.
-
-Customer B is the same page with a different `tenant_id`. Empty exception list is the isolation proof.
 
 ---
 
 ## Build plan
 
-Rule reminder: the hackathon asks for work created for this event. Use the days before 31 Oct to agree this design and the slides. Write the code on the day.
+All application code is written during the 31 Oct build day. The days before it go to agreeing this design. Two people, one on backend and one on frontend.
 
-Two people. Swap ownership if one of you is faster in Python.
-
-| Block | Hours | Person 1 | Person 2 |
+| Block | Hours | Backend | Frontend |
 | --- | --- | --- | --- |
 | 1 | 0–2 | SQLite schema, seed, matcher | Vite app shell, customer switcher, alert list |
 | 2 | 2–5 | Gate rules + pytest for the three demo scenes | Approval panel bound to mocked JSON |
@@ -366,7 +384,7 @@ Two people. Swap ownership if one of you is faster in Python.
 | 5 | 11–13 | Run the three scenes against the seed | Fix the path the judges will click |
 | 6 | last hour | Freeze seed. Rehearse the spoken demo twice | Same |
 
-Cut list if time slips, in this order: expiry job (check `expires_at` on read instead), nicer styling, a second model provider. Do not cut the refuse scene or the second customer.
+Cut list if time slips, in this order: expiry job (check `expires_at` on read instead), nicer styling, a second model provider. The refuse scene and the second customer are not cut.
 
 Tests that must pass before the demo:
 
@@ -376,49 +394,10 @@ Tests that must pass before the demo:
 - Active scanner exception for `cust-a` does not match a `cust-b` alert.
 - Process name `powershell.exe` with no hash and no publisher is refused by the normaliser.
 
-## Risks
+## Risks and fallbacks
 
 | Risk | What we do |
 | --- | --- |
 | Model returns prose or invented hosts | Pydantic rejects it. UI says the draft failed. Seed notes are written so the happy path is easy. |
-| Judges ask “doesn’t triage already learn?” | Gordon decides what reaches a human. MuteProof is the readable, expiring, per-customer rule after the close, with a refusal when the rule would hide an attack. |
-| Wifi blocks the model API | Cache the two successful JSON drafts for the rehearsed notes. The gate still runs live on those drafts. Say that the cache is the fallback. |
+| Wifi blocks the model API | Cache the two successful JSON drafts for the rehearsed notes. The gate still runs live on those drafts. We say in the demo that the cache is the fallback. |
 | Scope creep into auto-closing alerts | Out of scope. MuteProof never closes or suppresses without `approve`. |
-
-## Out of scope
-
-- Connecting to a real SIEM or EDR
-- Training a model
-- Cross-customer learning
-- Automatic renewal
-- Muting a whole detection rule
-
----
-
-## Slide outline
-
-Aim for 8 slides. Titles are the slide titles. Body is what to say, not a paragraph to paste onto the slide.
-
-**1. MuteProof**
-An analyst writes “this is our scanner.” We turn that into a small, temporary mute, and we block it when it would hide an attack.
-
-**2. The queue fills up after the close**
-Same scanner alert, every day. The note dies in the ticket. Next shift investigates it again. One pattern, 30 times a day, about two minutes each: roughly an hour a day, about 250 analyst-hours a year, one customer.
-
-**3. The dangerous shortcut**
-“Ignore PowerShell on this subnet” also matches ransomware staging. No owner, no expiry, no record of what else went quiet. One customer’s lesson must not silence another customer.
-
-**4. What MuteProof does**
-Drafts one exception: one detection, one entity, one time window, one customer, an owner, an expiry. Replays the last seven days. Refuses if a high-risk alert is inside. A person approves.
-
-**5. Where the AI is**
-The model reads the sentence and fills the exception. Rules and the replay decide allow or refuse. The human turns it on.
-
-**6. Three scenes we will show**
-Scanner note → 14-day mute, replay is clean. Subnet PowerShell note → refused, because a confirmed remote-execution alert is in scope; tighter alternative offered. Second customer → that scanner mute is absent.
-
-**7. Impact**
-Hours back to analysts on repeat noise. The attack stays visible. Every approve, refuse, and expiry is an audit line a detection engineer can defend.
-
-**8. What we are building on 31 Oct**
-A local web app and API. Seeded alerts. Structured draft, safety gate, replay, approval. Model writes the exception. Rules decide if it may exist.
